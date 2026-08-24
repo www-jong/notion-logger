@@ -150,19 +150,40 @@ def _event_blocks(ev, index: int) -> List[Dict[str, Any]]:
     return blocks
 
 
-def build_page_blocks(ctx: Context, turn: Turn, turn_number: int = 1) -> List[Dict[str, Any]]:
-    """턴 1개 → 페이지 본문 블록 배열 (턴당 페이지 1개 구조).
+TOC_BLOCK = {
+    # 노션의 /목차 에 해당하는 블록.
+    # 아래 heading(#, ##)들을 자동으로 모아 목차를 만들어준다.
+    "object": "block",
+    "type": "table_of_contents",
+    "table_of_contents": {"color": "default"},
+}
 
-    세션 전체 흐름이 필요하면 DB를 Session ID + Turns 정렬로 본다.
+
+def build_page_blocks(ctx: Context, turn: Turn, turn_number: int = 1,
+                      include_toc: bool = False) -> List[Dict[str, Any]]:
+    """턴 1개 → 본문 블록 배열.
+
+    같은 세션의 턴들이 한 페이지에 계속 append 되므로
+    매 턴마다 '# 🔄 Turn N' 헤딩으로 구간을 표시한다.
+    include_toc: 새 페이지를 만들 때 True — 최상단에 목차 배치.
     """
     blocks: List[Dict[str, Any]] = []
 
+    if include_toc:
+        blocks.append(TOC_BLOCK)
+
+    # 턴 헤딩에 요청 내용을 붙이면, 노션 목차가 곧
+    # '턴별 대화 목록' 역할을 해서 바로바로 점프할 수 있다.
+    request_headline = (turn.user_request or "").splitlines()[0][:40] if turn.user_request else ""
+    heading = f"# 🔄 Turn {turn_number}" + (f" — {request_headline}" if request_headline else "")
+    blocks += markdown_to_notion_blocks(heading)
+
     # --- 사용자 요청 ---
-    blocks += markdown_to_notion_blocks("# 📝 사용자 요청")
+    blocks += markdown_to_notion_blocks("## 📝 사용자 요청")
     blocks += markdown_to_notion_blocks(turn.user_request or "(없음)")
 
     # --- 작업 내역 ---
-    blocks += markdown_to_notion_blocks("# ⚙️ 작업 내역")
+    blocks += markdown_to_notion_blocks("## ⚙️ 작업 내역")
 
     call_index = 0
     pending_results: List[Any] = []
@@ -191,7 +212,7 @@ def build_page_blocks(ctx: Context, turn: Turn, turn_number: int = 1) -> List[Di
         blocks += markdown_to_notion_blocks("(툴 호출 없음 — 바로 응답한 턴)")
 
     # --- 최종 응답 (마크다운 그대로 변환) ---
-    blocks += markdown_to_notion_blocks("# 📝 최종 응답")
+    blocks += markdown_to_notion_blocks("## 📝 최종 응답")
     response_blocks = markdown_to_notion_blocks(turn.final_response or "(응답 없음)")
     blocks += response_blocks or markdown_to_notion_blocks("(변환된 블록 없음)")
 
