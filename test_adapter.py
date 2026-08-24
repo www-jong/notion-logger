@@ -60,14 +60,21 @@ def main() -> None:
 
     print(f"payload keys: {sorted(payload.keys())}")
 
+    # --- 1회차: 세션 기록 기록 ---
     page_id = process_payload(payload)
     if page_id is None:
         print("[실패] 페이지 생성 실패 — tmp/logger.log 확인")
         sys.exit(1)
 
     url = f"https://www.notion.so/{page_id.replace('-', '')}"
-    print("[성공] 세션 기록 페이지 생성 완료")
+    print("[성공] 세션 기록 페이지 처리 완료")
     print(f"확인: {url}")
+
+    # --- 2회차: 같은 payload 재처리 → 중복 기록 없음 확인 ---
+    page_id_2 = process_payload(payload)
+    same = (page_id_2 == page_id)
+    print(f"[검증] 재실행 결과: 같은 페이지={same} "
+          f"{'(정상 — state로 중복 방지)' if same else '(비정상)'}")
 
 
 if __name__ == "__main__":

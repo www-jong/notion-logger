@@ -25,6 +25,7 @@ from .base import (
     Adapter,
     Context,
     Event,
+    Turn,
     arg_command,
     arg_path,
     classify_tool,
@@ -100,82 +101,98 @@ class AntigravityAdapter(Adapter):
         return self._parse_entries(entries)
 
     @staticmethod
-    def _parse_entries(entries: List[Dict[str, Any]]) -> Tuple[str, List[Event], str]:
-        """마지막 USER_INPUT 이후의 기록을 하나의 턴으로 파싱."""
+    def _event_type(e: Dict[str, Any]) -> str:
+        return str(e.get("type") or "").upper()
 
-        def event_type(e: Dict[str, Any]) -> str:
-            return str(e.get("type") or "").upper()
+    def parse_turns(self, payload: Dict[str, Any]) -> List[Tuple[int, Turn]]:
+        """트랜스크립트 전체를 턴 단위로 파싱.
 
-        # 마지막 USER_INPUT 위치 찾기
-        last_user = -1
-        for i in range(len(entries) - 1, -1, -1):
-            if event_type(entries[i]) == "USER_INPUT":
-                last_user = i
-                break
+        반환: [(턴이 끝나는 위치(offset), Turn), ...]
+        offset = 그 턴의 마지막 엔트리 다음 인덱스.
+        호출자는 이전에 기록한 offset보다 큰 것만 처리하면 된다 (중복 방지).
+        """
+        entries = load_jsonl(str(payload.get("transcriptPath", "")))
+        turns: List[Tuple[int, Turn]] = []
 
-        if last_user == -1:
-            return "", [], ""
-
-        user_request = clean_user_request(
-            str(entries[last_user].get("content") or "")
-        )
-
-        events: List[Event] = []
-        final_candidates: List[str] = []
-
-        for entry in entries[last_user + 1:]:
-            etype = event_type(entry)
-            content = entry.get("content")
-
-            # ---- PLANNER_RESPONSE: tool_calls + 모델 텍스트 ----
-            if etype == "PLANNER_RESPONSE":
-                for call in entry.get("tool_calls") or []:
-                    if not isinstance(call, dict):
-                        continue
-                    name = str(call.get("name") or call.get("tool_name") or "unknown")
-                    args = call.get("args") or {}
-                    events.append(Event(
-                        kind="tool_call",
-                        tool=name,
-                        category=classify_tool(name, args),
-                        summary=str(args.get("summary") or ""),
-                        args=args if isinstance(args, dict) else {},
-                        command=arg_command(args),
-                        path="",
-                    ))
-                # 툴 경로는 args 안에 있으므로 여기서 보강
-                for ev in events:
-                    if ev.kind == "tool_call" and not ev.path:
-                        ev.path = arg_path(ev.args)
-
-                if isinstance(content, str) and content.strip():
-                    final_candidates.append(content.strip())
+        i = 0
+        while i < len(entries):
+            if self._event_type(entries[i]) != "USER_INPUT":
+                i += 1
                 continue
 
-            # ---- GENERIC: 툴 결과 / 에러 ----
-            if etype == "GENERIC":
-                if isinstance(content, list):
-                    content = "\n".join(str(x) for x in content)
-                if not isinstance(content, str):
-                    content = json.dumps(content, ensure_ascii=False)
-                content = content.strip()
-                if not content:
+            # USER_INPUT 하나가 턴의 시작. 다음 USER_INPUT 직전까지가 같은 턴.
+            user_request = clean_user_request(
+                str(entries[i].get("content") or "")
+            )
+
+            events: List[Event] = []
+            final_candidates: List[str] = []
+
+            j = i + 1
+            while j < len(entries) and self._event_type(entries[j]) != "USER_INPUT":
+                self._parse_entry(events, final_candidates, entries[j])
+                j += 1
+
+            final_response = final_candidates[-1] if final_candidates else ""
+            turns.append((j, Turn(user_request=user_request,
+                                  final_response=final_response,
+                                  events=events)))
+            i = j
+
+        return turns
+
+    def _parse_entry(self, events: List[Event], final_candidates: List[str],
+                     entry: Dict[str, Any]) -> None:
+        """엔트리 1개를 해석해 events / 최종응답 후보에 추가."""
+        etype = self._event_type(entry)
+        content = entry.get("content")
+
+        if etype == "PLANNER_RESPONSE":
+            for call in entry.get("tool_calls") or []:
+                if not isinstance(call, dict):
                     continue
-
-                lowered = content.lower()
-                is_error = (
-                    str(entry.get("status") or "").upper() in {"ERROR", "FAILED"}
-                    or "traceback" in lowered
-                    or "error:" in lowered
+                name = str(call.get("name") or call.get("tool_name") or "unknown")
+                args = call.get("args") or {}
+                ev = Event(
+                    kind="tool_call",
+                    tool=name,
+                    category=classify_tool(name, args),
+                    summary=str(args.get("summary") or ""),
+                    args=args if isinstance(args, dict) else {},
+                    command=arg_command(args),
+                    path=arg_path(args) if isinstance(args, dict) else "",
                 )
+                events.append(ev)
 
-                events.append(Event(
-                    kind="error" if is_error else "tool_result",
-                    result=content[:MAX_RESULT_LENGTH],
-                ))
-                continue
+            if isinstance(content, str) and content.strip():
+                final_candidates.append(content.strip())
+            return
 
-            # 다른 타입(CHECKPOINT 등)은 무시
+        if etype == "GENERIC":
+            if isinstance(content, list):
+                content = "\n".join(str(x) for x in content)
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            content = content.strip()
+            if not content:
+                return
 
-        final_response = final_candidates[-1] if final_candidates else ""
-        return user_request, events, final_response
+            lowered = content.lower()
+            is_error = (
+                str(entry.get("status") or "").upper() in {"ERROR", "FAILED"}
+                or "traceback" in lowered
+                or "error:" in lowered
+            )
+
+            events.append(Event(
+                kind="error" if is_error else "tool_result",
+                result=content[:MAX_RESULT_LENGTH],
+            ))
+
+    def parse_last_turn(self, payload: Dict[str, Any]) -> Tuple[str, List[Event], str]:
+        """(하위 호환용) 마지막 턴만 파싱."""
+        turns = self.parse_turns(payload)
+        if not turns:
+            return "", [], ""
+        turn = turns[-1][1]
+        return turn.user_request, turn.events, turn.final_response

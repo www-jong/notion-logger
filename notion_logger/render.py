@@ -58,9 +58,14 @@ def _truncate(text: str, limit: int = 2000) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+# 페이지 제목(요청 첫 줄) 최대 길이
+TITLE_MAX_CHARS = 50
+
+
 def build_properties(schema: Dict[str, Any], ctx: Context,
                      turn: Turn, stats: Dict[str, int],
-                     status: str, work_type: str) -> Dict[str, Any]:
+                     status: str, work_type: str,
+                     turn_number: int = 1) -> Dict[str, Any]:
     """DB 스키마를 보고 '존재하는 컬럼만' 값으로 채운다."""
 
     props: Dict[str, Any] = {}
@@ -69,10 +74,14 @@ def build_properties(schema: Dict[str, Any], ctx: Context,
         if name in schema:
             props[name] = value
 
-    # 제목 컬럼은 이름이 무엇이든(title 타입) 자동 감지해서 사용
+    # 제목 컬럼은 이름이 무엇이든(title 타입) 자동 감지해서 사용.
+    # 요청 첫 줄만 자르지 않고 넣으면 파일 경로 등으로 지나치게 길어지므로
+    # 앞 50자까지만 넣는다.
     title_name = notion_api.title_property_name(schema)
     if title_name:
-        first_line = turn.user_request.splitlines()[0] if turn.user_request else "(빈 요청)"
+        first_line = turn.user_request.splitlines()[0].strip() if turn.user_request else "(빈 요청)"
+        if len(first_line) > TITLE_MAX_CHARS:
+            first_line = first_line[:TITLE_MAX_CHARS] + "…"
         props[title_name] = {
             "title": [{"text": {"content": _truncate(first_line, 200)}}]
         }
@@ -89,7 +98,7 @@ def build_properties(schema: Dict[str, Any], ctx: Context,
     put("Last At", {"date": {"start": now_iso}})
 
     for name, value in (
-        ("Turns", 1),
+        ("Turns", turn_number),
         ("Tool Calls", stats["tool_calls"]),
         ("Commands", stats["commands"]),
         ("Files Read", stats["files_read"]),
@@ -141,14 +150,16 @@ def _event_blocks(ev, index: int) -> List[Dict[str, Any]]:
     return blocks
 
 
-def build_page_blocks(ctx: Context, turn: Turn) -> List[Dict[str, Any]]:
-    """턴 전체 → 페이지 본문 블록 배열."""
+def build_page_blocks(ctx: Context, turn: Turn, turn_number: int = 1) -> List[Dict[str, Any]]:
+    """턴 1개 → 페이지 본문 블록 배열 (턴당 페이지 1개 구조).
+
+    세션 전체 흐름이 필요하면 DB를 Session ID + Turns 정렬로 본다.
+    """
     blocks: List[Dict[str, Any]] = []
 
     # --- 사용자 요청 ---
     blocks += markdown_to_notion_blocks("# 📝 사용자 요청")
     blocks += markdown_to_notion_blocks(turn.user_request or "(없음)")
-    blocks += markdown_to_notion_blocks("---")
 
     # --- 작업 내역 ---
     blocks += markdown_to_notion_blocks("# ⚙️ 작업 내역")
@@ -168,22 +179,22 @@ def build_page_blocks(ctx: Context, turn: Turn) -> List[Dict[str, Any]]:
     errors = [e for e in pending_results if e.kind == "error"]
 
     if results:
-        blocks += markdown_to_notion_blocks("## 📤 실행 결과")
+        blocks += markdown_to_notion_blocks("# 📤 실행 결과")
         for r in results[:10]:  # 너무 많으면 앞 10개만
             blocks += _code(r.result)
     if errors:
-        blocks += markdown_to_notion_blocks("## ❌ 에러")
+        blocks += markdown_to_notion_blocks("# ❌ 에러")
         for er in errors[:10]:
             blocks += _code(er.result)
 
     if call_index == 0 and not results and not errors:
         blocks += markdown_to_notion_blocks("(툴 호출 없음 — 바로 응답한 턴)")
 
-    blocks += markdown_to_notion_blocks("---")
-
     # --- 최종 응답 (마크다운 그대로 변환) ---
     blocks += markdown_to_notion_blocks("# 📝 최종 응답")
     response_blocks = markdown_to_notion_blocks(turn.final_response or "(응답 없음)")
     blocks += response_blocks or markdown_to_notion_blocks("(변환된 블록 없음)")
+
+    blocks += markdown_to_notion_blocks("---")
 
     return blocks

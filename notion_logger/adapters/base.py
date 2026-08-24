@@ -83,17 +83,13 @@ class Adapter(ABC):
         """프로젝트명과 세션 ID 추출."""
 
     @abstractmethod
-    def parse_last_turn(self, payload: Dict[str, Any]) -> Tuple[str, List[Event], str]:
-        """트랜스크립트에서 '마지막 턴'을 파싱.
+    def parse_turns(self, payload: Dict[str, Any]) -> List[Tuple[int, Turn]]:
+        """트랜스크립트 전체를 턴 단위로 파싱.
 
-        반환: (user_request, events, final_response)
+        반환: (end_offset, Turn) 목록.
+        end_offset은 트랜스크립트에서 그 턴이 끝나는 위치로,
+        호출자가 이전 기록 위치와 비교해 새 턴만 걸러내는 데 쓰인다.
         """
-
-    def build_turn(self, payload: Dict[str, Any]) -> Tuple[Context, Turn]:
-        """context + Turn을 한 번에 만든다."""
-        ctx = self.context(payload)
-        request, events, response = self.parse_last_turn(payload)
-        return ctx, Turn(user_request=request, final_response=response, events=events)
 
 
 # ------------------------------------------------------------
