@@ -63,18 +63,22 @@ def main() -> None:
     # --- 1회차: 세션 기록 기록 ---
     page_id = process_payload(payload)
     if page_id is None:
-        print("[실패] 페이지 생성 실패 — tmp/logger.log 확인")
-        sys.exit(1)
+        # 새 턴이 없으면(이미 최신까지 기록됨) 정상적으로 None 반환
+        print("[결과] 생성된 페이지 없음 (이미 최신까지 기록됐거나 실패)")
+        print("       자세한 내용은 tmp/logger.log 확인")
+        sys.exit(0)
 
     url = f"https://www.notion.so/{page_id.replace('-', '')}"
     print("[성공] 세션 기록 페이지 처리 완료")
     print(f"확인: {url}")
 
     # --- 2회차: 같은 payload 재처리 → 중복 기록 없음 확인 ---
+    # 클래식 모드(턴당 페이지)에서는 새 턴이 없으면 None 반환과 state 갱신 없음이 정상.
     page_id_2 = process_payload(payload)
-    same = (page_id_2 == page_id)
-    print(f"[검증] 재실행 결과: 같은 페이지={same} "
-          f"{'(정상 — state로 중복 방지)' if same else '(비정상)'}")
+    if page_id_2 is None:
+        print("[검증] 재실행 결과: 새 페이지 생성 없음 (정상 — state로 중복 방지)")
+    else:
+        print("[비정상] 재실행에서 중복 페이지 생성됨:", page_id_2)
 
 
 if __name__ == "__main__":

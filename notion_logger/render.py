@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from . import notion_api
-from .adapters.base import TOOL_CATEGORY_ICONS, Context, Turn
+from .adapters.base import TOOL_CATEGORY_ICONS, Context, Turn, hostname
 from .md2notion import markdown_to_notion_blocks
 
 
@@ -89,7 +89,7 @@ def build_properties(schema: Dict[str, Any], ctx: Context,
     now_iso = datetime.now(timezone.utc).isoformat()
 
     put("Agent", {"select": {"name": ctx.agent}})
-    put("Host/Device", {"select": {"name": __import__("socket").gethostname()}})
+    put("Host/Device", {"select": {"name": hostname()}})
     put("Project", {"select": {"name": ctx.project}})
     put("Status", {"select": {"name": status}})
     put("Work Type", {"select": {"name": work_type}})

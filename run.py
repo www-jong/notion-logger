@@ -27,6 +27,7 @@ logging.basicConfig(
     filename=str(_LOG_DIR / "logger.log"),
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
+    encoding="utf-8",  # Windows(cp949) 등 모든 OS에서 한글/이모지 로깅 보장
 )
 
 
