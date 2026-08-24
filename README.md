@@ -43,11 +43,14 @@
 
 ### 1-3. 데이터베이스 ID 확인
 
-1. 해당 DB를 **full page로 열기** (DB 뷰 우측 상단 ⋯ → "Open as full page")
+1. 해당 DB를 **full page로 열기** (DB 뷰 우측 상단 ⋯ → "Open as full page(전체 페이지로 열기)")
 2. 브라우저 주소창 URL에서 마지막 32자리 영숫자가 DB ID:
    ```
-   https://www.notion.so/내DB이름-3c6031069f3380c99d59e1fc2c9b5f46
-                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 이 부분
+   https://www.notion.so/내DB이름-abcdefegaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 32글자 이 부분
+
+   https://app.notion.com/p/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?v=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&source=copy_link
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 32글자 이 부분
    ```
 
 ### 1-4. 컬럼 자동 생성
@@ -79,10 +82,10 @@ NOTION_DATABASE_ID=32자리_DB_ID
 
 파일: `~/.gemini/config/hooks.json` (없으면 새로 만들기)
 
-| OS | 경로 |
-|---|---|
-| Windows | `C:\Users\<사용자>\.gemini\config\hooks.json` |
-| macOS/Linux | `~/.gemini/config/hooks.json` |
+| OS          | 경로                                            |
+| ----------- | ----------------------------------------------- |
+| Windows     | `C:\Users\<사용자>\.gemini\config\hooks.json` |
+| macOS/Linux | `~/.gemini/config/hooks.json`                 |
 
 ```json
 {
@@ -127,12 +130,12 @@ DB에 다음 정렬을 추가하면 편하다:
 
 ## 5. 문제 해결
 
-| 증상 | 확인할 곳 |
-|---|---|
-| 노션에 안 들어감 | 저장소 `tmp/logger.log` — hook이 실행됐는지, 오류 메시지는 뭔지 |
-| hook 호출 여부부터 확인 | `debug_hook.py`를 hook command로 잠시 연결하면 stdin 수신 내용을 파일로 덤프 |
-| 404 object_not_found | DB가 인테그레이션에 연결되지 않음 (위 1-2 참고) |
-| 페이지는 생기는데 컬럼이 비어있음 | DB에 해당 이름의 컬럼이 없는 것 — `setup_notion_db.py` 재실행 |
+| 증상                              | 확인할 곳                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------------ |
+| 노션에 안 들어감                  | 저장소`tmp/logger.log` — hook이 실행됐는지, 오류 메시지는 뭔지              |
+| hook 호출 여부부터 확인           | `debug_hook.py`를 hook command로 잠시 연결하면 stdin 수신 내용을 파일로 덤프 |
+| 404 object_not_found              | DB가 인테그레이션에 연결되지 않음 (위 1-2 참고)                                |
+| 페이지는 생기는데 컬럼이 비어있음 | DB에 해당 이름의 컬럼이 없는 것 —`setup_notion_db.py` 재실행                |
 
 ## 6. OS 호환성
 
@@ -153,9 +156,9 @@ python test_adapter.py      # 실제 세션 기록 파싱 → 페이지 생성 �
 
 ### 브랜치 구조
 
-| 브랜치 | 구조 |
-|---|---|
-| `master` | **한 행당 한 대화(턴)** — 권장 |
+| 브랜치               | 구조                                                          |
+| -------------------- | ------------------------------------------------------------- |
+| `master`           | **한 행당 한 대화(턴)** — 권장                         |
 | `session-per-page` | 세션당 페이지 1개, 턴 타임라인 append + 목차 (대안 구현 보관) |
 
 ## 라이선스
