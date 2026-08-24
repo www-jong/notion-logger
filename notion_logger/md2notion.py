@@ -11,6 +11,7 @@
         > 인용                 → quote
         ---                    → divider
         ```언어 ... ```        → code (언어명 자동 매핑)
+        | 표 | 행 |            → table (첫 줄 헤더, 정렬 구분행 자동 인식)
     Inline:
         **굵게** / __굵게__
         *기울임* / _기울임_
@@ -281,6 +282,73 @@ def _code_blocks(content: str, lang: str) -> List[Dict[str, Any]]:
 
 
 # ------------------------------------------------------------
+# 마크다운 표 → 노션 table 블록
+# ------------------------------------------------------------
+
+def _is_table_separator(line: str) -> bool:
+    """| --- | :---: | 같은 정렬 구분 행인지 검사."""
+    return bool(re.match(r"^\s*\|?\s*:?-{2,}.*\|", line)) and set(line) <= set("|-: \t")
+
+
+def _parse_table_rows(lines: List[str]) -> List[List[str]]:
+    """표 본문 줄들을 셀 배열로 파싱. 앞뒤 '|' 유무 모두 허용."""
+    rows: List[List[str]] = []
+    for line in lines:
+        stripped = line.strip()
+        # 양 끝의 불필요한 | 제거 후 셀 분할 (이스케이프된 \| 는 보존)
+        if stripped.startswith("|"):
+            stripped = stripped[1:]
+        if stripped.endswith("|"):
+            stripped = stripped[:-1]
+        cells = [c.strip().replace("\\|", "|") for c in stripped.split("|")]
+        rows.append(cells)
+    return rows
+
+
+def _table_block(row_lines: List[str]) -> Dict[str, Any]:
+    """표 줄들(헤더+구분행+본문)을 노션 table 블록 1개로 변환."""
+    raw_rows = _parse_table_rows(row_lines)
+
+    # 두 번째 줄이 정렬 구분행이면 실제 데이터에서 제외
+    has_sep = len(raw_rows) >= 2 and _is_table_separator(row_lines[1])
+    data_rows = [raw_rows[0]] + (raw_rows[2:] if has_sep else raw_rows[1:])
+    has_header = not has_sep  # 구분행이 있으면 첫 줄이 헤더라는 의미
+
+    # 열 개수는 가장 많은 행 기준으로 맞추고, 부족한 셀은 빈 값으로 패딩
+    width = max(len(r) for r in data_rows)
+
+    children: List[Dict[str, Any]] = []
+    for r in data_rows:
+        padded = r + [""] * (width - len(r))
+        cells = []
+        for cell in padded[:width]:
+            groups = _split_rich_text(parse_inline(cell))
+            cells.append(groups[0] if groups else [])
+        children.append({
+            "object": "block",
+            "type": "table_row",
+            "table_row": {"cells": cells},
+        })
+
+    return {
+        "object": "block",
+        "type": "table",
+        "table": {
+            "table_width": width,
+            "has_column_header": has_header,
+            "has_row_header": False,
+            "children": children,
+        },
+    }
+
+
+def _is_table_line(line: str) -> bool:
+    """표 본문 줄인지 판단: | 로 시작하거나, 셀 구분 | 을 1개 이상 포함한 줄."""
+    stripped = line.strip()
+    return stripped.startswith("|") and stripped.count("|") >= 2
+
+
+# ------------------------------------------------------------
 # 메인 파서: 마크다운 전체 → 블록 배열
 # ------------------------------------------------------------
 
@@ -325,8 +393,29 @@ def markdown_to_notion_blocks(markdown: str) -> List[Dict[str, Any]]:
             body["checked"] = bool(checked)
         return {"object": "block", "type": btype, btype: body}
 
-    for line in lines:
+    # 표 파싱에서 소비한 줄은 건너뛰기 위한 마커
+    # (반복 중 리스트를 수정하지 않기 위해 인덱스 방식 사용)
+    consumed_until = -1
+
+    for line_index, line in enumerate(lines):
         stripped = line.strip()
+
+        # 표로 이미 소비된 줄은 모든 처리에서 제외 (중복 출력 방지)
+        if line_index <= consumed_until:
+            continue
+
+        # ===== 마크다운 표 (| 로 시작하는 연속된 줄) =====
+        if not in_code and _is_table_line(line):
+            flush_paragraph()
+            close_lists()
+
+            end = line_index
+            while end < len(lines) and _is_table_line(lines[end]):
+                end += 1
+
+            blocks.append(_table_block(lines[line_index:end]))
+            consumed_until = end - 1
+            continue
 
         # ===== 코드 펜스 시작/끝 =====
         if stripped.startswith("```"):
