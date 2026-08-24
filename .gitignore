@@ -1,0 +1,17 @@
+# 비밀/설정
+.env
+*.env
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 로그/임시
+tmp/
+*.log
+
+# IDE
+.idea/
+.vscode/
