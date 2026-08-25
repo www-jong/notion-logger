@@ -17,8 +17,15 @@
   `Turns` 컬럼에 세션 내 순번이 기록된다.
 - **세션 흐름 보기**: DB에서 `Session ID` 오름차순 + `Turns` 오름차순 정렬을
   추가하면 하나의 세션이 시간순 대화 목록처럼 보인다.
-- 이미 기록한 턴은 로컬 state 파일로 중복 기록을 막는다.
+- **중복 방지는 노션이 진실원천**: 매 실행마다 해당 세션으로 이미 기록된
+  `Turns` 번호를 노션에서 조회하고, 없는 번호만 생성한다. 로컬 state 파일
+  없음 — 트랜스크립트가 재작성(프롬프트 컴팩션 등)돼도 영향 없다.
+- **저비용 게이트**: 새 턴 여부를 JSON 파싱 없이 문자열/SQL 스캔으로 먼저
+  판별하므로, 트랜스크립트가 아무리 길어져도 새 턴이 없으면 수 ms 만에 종료.
+- `Created At` = 실제 대화 시각(트랜스크립트 기준), `Last At` = 노션 기록 시각.
 - 마크다운(헤딩/목록/표/코드블록/굵게/링크 등)은 노션 블록으로 변환된다.
+  리스트 중첩은 노션 API 제한에 맞춰 2단계까지만 지원(그 이상은 `↳`로 평탄화).
+- 동시 실행 방지 락: 훅이 겹쳐 발동돼도 프로세스 하나만 처리한다.
 
 ## 요구 사항
 
@@ -93,31 +100,56 @@ NOTION_DATABASE_ID=32자리_DB_ID
     "Stop": [
       {
         "type": "command",
-        "command": "python C:/dev/notion-logger/run.py",
-        "timeout": 30
+        "command": "python C:/dev/notion-logger/run.py antigravity",
+        "timeout": 120
       }
     ]
   }
 }
 ```
 
+- `command` 끝에 **에이전트 이름을 argv로 지정**한다 (`run.py antigravity`).
+  이름을 생략하면 payload 지문으로 자동 감지한다(폴백).
 - `command`에는 **이 저장소의 run.py 절대 경로**를 적는다.
-  (macOS/Linux라면 `"python3 /Users/xxx/notion-logger/run.py"`)
+  (macOS/Linux라면 `"python3 /Users/xxx/notion-logger/run.py antigravity"`)
+- `timeout`은 밀린 턴을 몰아 기록할 수 있게 넉넉히 (권장 120). 짧으면
+  처리 도중 강제 종료되지만, 턴 단위로 이어 기록되므로 다음 훅에서 계속된다.
 - 설정 후 에이전트를 **재시작**해야 반영된다.
 
 ### opencode
 
-미구현 (roadmap). 어댑터 인터페이스(`notion_logger/adapters/base.py`)에
-맞춰 구현하면 된다.
+트랜스크립트 파일이 없고 SQLite DB(`~/.local/share/opencode/opencode.db`)와
+플러그인 방식을 쓴다는 점만 다르고 흐름은 같다.
+
+1. 플러그인 등록 — `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "file:///절대경로/notion-logger/plugin/session-logger.js"
+  ]
+}
+```
+
+   또는 저장소의 `plugin/session-logger.js`를 `~/.config/opencode/plugins/`
+   아래에 복사해도 된다. **둘 중 한 곳에만** 등록할 것 (중복 등록 시
+   같은 턴이 두 번 기록될 수 있음).
+
+2. opencode 재시작 → 대화 1턴 진행 → 노션 확인.
+
+플러그인은 세션 유휴(`session.idle`) 시점에 `run.py opencode`를 호출하고,
+어댑터가 SQLite DB를 readonly로 읽어 파싱한다.
 
 ### 다른 에이전트 추가하기
 
-`notion_logger/adapters/base.py::Adapter`를 상속해 세 가지만 구현하고
-`adapters/__init__.py`에 등록한다:
+`notion_logger/adapters/base.py::Adapter`를 상속해 다음을 구현하고
+`adapters/__init__.py` `_ADAPTERS` 딕셔너리에 이름과 함께 등록한다:
 
-- `matches(payload)` — stdin payload가 이 에이전트 것인지 판별
+- `matches(payload)` — stdin payload가 이 에이전트 것인지 판별 (폴백용)
 - `context(payload)` — 프로젝트명 / 세션 ID 추출
-- `parse_turns(payload)` — transcript를 턴 배열로 파싱
+- `count_turns(payload)` — 총 턴 수 저비용 카운트 (JSON 파싱 금지)
+- `parse_turns(payload, numbers)` — 요청된 순번의 턴만 파싱
 
 ## 4. 노션에서 보기
 
@@ -141,8 +173,8 @@ DB에 다음 정렬을 추가하면 편하다:
 
 - 경로 처리는 전부 `pathlib` 기반, stdin은 바이트로 읽어 UTF-8 디코딩하므로
   Windows(cp949) / macOS / Linux 모두 동작한다.
-- state 파일 위치: Windows `%LOCALAPPDATA%\notion-logger\state.json`,
-  그 외 `$XDG_STATE_HOME/notion-logger/state.json` (기본 `~/.local/state/...`)
+- opencode 어댑터는 `~/.local/share/opencode/opencode.db`를 readonly
+  (SQLite URI `mode=ro`)로 열므로 본체와 충돌하지 않는다.
 - hook 등록 명령에서 실행 파일 이름만 주의: Windows `python`, macOS/Linux `python3`
 - 로그 파일은 항상 UTF-8로 기록된다.
 
