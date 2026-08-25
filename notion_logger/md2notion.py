@@ -352,8 +352,15 @@ def _is_table_line(line: str) -> bool:
 # 메인 파서: 마크다운 전체 → 블록 배열
 # ------------------------------------------------------------
 
+MAX_LIST_DEPTH = 2  # 블록 중첩 허용 단계 (리스트 항목 + children 1단계)
+
+
 def markdown_to_notion_blocks(markdown: str) -> List[Dict[str, Any]]:
-    """마크다운 문자열을 노션 블록 배열로 변환한다."""
+    """마크다운 문자열을 노션 블록 배열로 변환한다.
+
+    리스트 중첩은 MAX_LIST_DEPTH 단계까지만 지원한다.
+    (노션 API가 요청 1건당 그 이상의 children 중첩을 거부함)
+    """
     if not markdown:
         return []
 
@@ -473,22 +480,28 @@ def markdown_to_notion_blocks(markdown: str) -> List[Dict[str, Any]]:
                 indent, text = len(bullet.group(1)), bullet.group(2)
                 block = make_list_item("bullet", text, None)
 
+            while list_stack and indent <= list_stack[-1][0]:
+                list_stack.pop()
+
             if not list_stack:
                 blocks.append(block)
+                list_stack.append((indent, block))
+            elif len(list_stack) >= MAX_LIST_DEPTH:
+                # 노션 API는 요청 1건당 2단계 중첩(children 안의 children)까지만
+                # 허용한다. 그보다 깊은 들여쓰기는 마지막 허용 단계에 평탄화하고
+                # 시각적 위계만 남긴다. 스택에 쌓지 않으므로 이후 같은/더 깊은
+                # 들여쓰기 항목도 계속 같은 부모로 평탄화된다.
+                parent = list_stack[MAX_LIST_DEPTH - 1][1]
+                ptype = parent["type"]
+                rt = block[ptype].setdefault("rich_text", [])
+                rt.insert(0, {"type": "text", "text": {"content": "↳ "}})
+                parent[ptype].setdefault("children", []).append(block)
             else:
-                # 현재 들여쓰기보다 깊거나 같은 항목들은 스택에서 제거
-                while list_stack and indent <= list_stack[-1][0]:
-                    list_stack.pop()
-
-                if list_stack:
-                    # 부모 리스트 항목의 children으로 중첩
-                    parent = list_stack[-1][1]
-                    ptype = parent["type"]
-                    parent[ptype].setdefault("children", []).append(block)
-                else:
-                    blocks.append(block)
-
-            list_stack.append((indent, block))
+                # 부모 리스트 항목의 children으로 중첩
+                parent = list_stack[-1][1]
+                ptype = parent["type"]
+                parent[ptype].setdefault("children", []).append(block)
+                list_stack.append((indent, block))
             continue
 
         # ===== 인용 =====
