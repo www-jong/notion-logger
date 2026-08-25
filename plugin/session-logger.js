@@ -9,15 +9,29 @@
 const RUN_PATH = "/Users/wonjong/.gemini/hooks/notion-logger/run.py";
 const AGENT_NAME = "opencode";
 
+const DEBUG_LOG = "/Users/wonjong/.gemini/hooks/notion-logger/tmp/opencode_plugin.log";
+
+function trace(msg) {
+  try {
+    Bun.write(Bun.file(DEBUG_LOG, { append: true }),
+      `[${new Date().toISOString()}] ${msg}\n`);
+  } catch (_) {}
+}
+
 export const NotionAutoLoggerPlugin = async ({ directory }) => {
+  trace(`plugin loaded (directory=${directory})`);
   return {
     event: async ({ event }) => {
-      if (!event || event.type !== "session.idle") return;
       try {
+        trace(`event: ${event?.type}`);
+        if (!event || event.type !== "session.idle") return;
         const props = event.properties || {};
         const sessionID =
           props.info?.id || props.sessionID || props.info?.sessionID;
-        if (!sessionID) return;
+        if (!sessionID) {
+          trace(`no sessionID. props keys=${Object.keys(props).join(",")}`);
+          return;
+        }
 
         const payload = JSON.stringify({
           source: AGENT_NAME,
