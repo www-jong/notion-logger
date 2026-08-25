@@ -14,6 +14,7 @@ hook 진입점 — v0.5b
 로그 위치: tmp/logger.log
 """
 
+import fcntl
 import json
 import logging
 import sys
@@ -31,7 +32,28 @@ logging.basicConfig(
 )
 
 
+def _acquire_single_flight() -> object | None:
+    """동시 실행 방지 락. 이미 돌고 있으면 None 반환 (조용히 종료).
+
+    훅이 짧은 간격으로 여러 번 발사되면 두 프로세스가 같은 state를 읽어
+    같은 턴을 중복 기록할 수 있다. 논블로킹 flock으로 한 번에 하나만 처리.
+    """
+    lock_path = _LOG_DIR / "run.lock"
+    handle = open(lock_path, "w")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return handle
+    except OSError:
+        handle.close()
+        logging.info("이미 실행 중 — 스킵")
+        return None
+
+
 def main() -> None:
+    lock = _acquire_single_flight()
+    if lock is None:
+        return
+
     from notion_logger import config
     from notion_logger.pipeline import process_payload
 
