@@ -43,12 +43,15 @@ def main() -> None:
 
         payload = json.loads(raw.decode("utf-8", errors="replace"))
 
+        # hook 설정에서 에이전트 이름을 argv[1]로 지정 (예: run.py opencode)
+        agent_name = sys.argv[1] if len(sys.argv) > 1 else ""
+
         config.load_env()
         if not config.is_configured():
             logging.error(".env 설정 없음 — 종료")
             return
 
-        page_id = process_payload(payload)
+        page_id = process_payload(payload, agent_name=agent_name)
         if page_id is None:
             logging.warning("페이지 생성 실패")
         else:

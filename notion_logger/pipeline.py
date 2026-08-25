@@ -19,8 +19,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from . import notion_api, render, state
-from .adapters import detect_adapter
-from .adapters.base import Context
+from .adapters import detect_adapter, get_adapter
+from .adapters.base import Adapter, Context
 
 log = logging.getLogger(__name__)
 
@@ -29,12 +29,18 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def process_payload(payload: Dict[str, Any]) -> Optional[str]:
+def process_payload(payload: Dict[str, Any], agent_name: str = "") -> Optional[str]:
     """payload 1건을 처리하고 마지막으로 만든 page id를 반환한다.
 
+    agent_name이 주어지면 그 어댑터를 바로 쓰고(hook 설정 지정 경로),
+    없으면 payload 지문으로 감지한다.
     실패 시 None (절대 예외를 밖으로 던지지 않는다 — hook 방해 금지).
     """
-    adapter = detect_adapter(payload)
+    adapter = get_adapter(agent_name)
+    if adapter is None and agent_name:
+        log.warning("알 수 없는 에이전트 이름 '%s' — 지문 감지로 폴백", agent_name)
+    if adapter is None:
+        adapter = detect_adapter(payload)
     if adapter is None:
         log.warning("맞는 어댑터 없음. payload keys=%s", sorted(payload.keys()))
         return None
@@ -63,7 +69,7 @@ def process_payload(payload: Dict[str, Any]) -> Optional[str]:
                              turns=turn_count, session_seen=True)
                 return None
 
-        pending = [(end, t) for end, t in turns if end > last_offset]
+        pending = [(end, t) for end, t in turns if adapter.is_new(end, last_offset)]
 
         if not pending:
             log.info("새 턴 없음: %s (offset=%d)", key, last_offset)
