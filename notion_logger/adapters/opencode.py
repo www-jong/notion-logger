@@ -37,8 +37,29 @@ MAX_RESULT_LENGTH = 8000
 
 
 def db_path() -> Path:
-    """opencode 데이터베이스 위치."""
-    return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+    """opencode 데이터베이스 위치 (플랫폼별 후보 경로 순차 검색)."""
+    candidates = [
+        # POSIX 표준 (XDG)
+        Path.home() / ".local" / "share" / "opencode" / "opencode.db",
+        # macOS 표준
+        Path.home() / "Library" / "Application Support" / "opencode" / "opencode.db",
+        # 공통 config
+        Path.home() / ".config" / "opencode" / "opencode.db",
+    ]
+
+    # Windows 환경 변수 기반 경로 추가
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        candidates.insert(0, Path(appdata) / "opencode" / "opencode.db")
+    localappdata = os.getenv("LOCALAPPDATA")
+    if localappdata:
+        candidates.insert(1, Path(localappdata) / "opencode" / "opencode.db")
+
+    for p in candidates:
+        if p.exists():
+            return p
+
+    return candidates[0]
 
 
 def connect_ro() -> Optional[sqlite3.Connection]:
