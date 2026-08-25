@@ -493,7 +493,8 @@ def markdown_to_notion_blocks(markdown: str) -> List[Dict[str, Any]]:
                 # 들여쓰기 항목도 계속 같은 부모로 평탄화된다.
                 parent = list_stack[MAX_LIST_DEPTH - 1][1]
                 ptype = parent["type"]
-                rt = block[ptype].setdefault("rich_text", [])
+                ctype = block["type"]
+                rt = block[ctype].setdefault("rich_text", [])
                 rt.insert(0, {"type": "text", "text": {"content": "↳ "}})
                 parent[ptype].setdefault("children", []).append(block)
             else:

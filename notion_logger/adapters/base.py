@@ -12,7 +12,7 @@ import socket
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -31,9 +31,11 @@ class Event:
 @dataclass
 class Turn:
     """사용자 요청 1회 ↔ 에이전트 최종 응답 1회 사이의 기록."""
-    user_request: str
-    final_response: str
-    events: List[Event]
+    number: int = 0                # 세션 내 턴 순번 (1부터, USER_INPUT/user 메시지 기준)
+    occurred_at: str = ""          # 턴 시작 실제 시각 (ISO 8601 / UTC)
+    user_request: str = ""
+    final_response: str = ""
+    events: List[Event] = field(default_factory=list)
 
 
 @dataclass
@@ -83,26 +85,22 @@ class Adapter(ABC):
         """프로젝트명과 세션 ID 추출."""
 
     @abstractmethod
-    def parse_turns(self, payload: Dict[str, Any]) -> List[Tuple[Any, Turn]]:
-        """트랜스크립트 전체를 턴 단위로 파싱.
+    def count_turns(self, payload: Dict[str, Any]) -> int:
+        """세션의 총 턴 수를 저비용으로 세어 반환.
 
-        반환: (end_offset, Turn) 목록.
-        end_offset은 트랜스크립트에서 그 턴이 끝나는 위치 식별자로,
-        타입은 에이전트마다 다르다 (Antigravity: 라인 인덱스 int,
-        opencode: "time_created:message_id" 커서 str).
-        호출자는 is_new()로 이전 기록 위치와 비교해 새 턴만 걸러낸다.
+        게이트 용도이므로 JSON 파싱 없이 문자열/SQL 스캔 등 가벼운 방식 사용.
+        실제보다 크게 세어도 무방 (이후 parse_turns가 정확히 판정).
         """
 
-    def is_new(self, offset: Any, last_offset: Any) -> bool:
-        """offset이 last_offset 이후의 새 기록인지 판별.
+    @abstractmethod
+    def parse_turns(self, payload: Dict[str, Any],
+                    numbers: set) -> List[Turn]:
+        """요청된 순번의 턴만 파싱해 반환.
 
-        기본 구현은 int 비교 (라인 인덱스 방식).
-        문자열 커서 등 다른 방식을 쓰는 어댑터는 오버라이드한다.
+        numbers: 필요한 턴 순번 집합 (1부터 시작).
+        트랜스크립트 재작성에 영향 받지 않도록 순번은
+        USER_INPUT(또는 user 메시지) 출현 순서 기준.
         """
-        try:
-            return int(offset) > int(last_offset)
-        except (TypeError, ValueError):
-            return True
 
 
 # ------------------------------------------------------------

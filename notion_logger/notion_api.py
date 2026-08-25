@@ -83,6 +83,50 @@ def create_page(properties: Dict[str, Any], blocks: List[Dict[str, Any]]) -> Opt
     return page_id
 
 
+def recorded_turn_numbers(session_id: str) -> set:
+    """해당 세션으로 노션에 기록된 턴 번호(Turns) 집합 조회.
+
+    기록 위치 판단의 유일한 진실원천. state 파일을 쓰지 않는다.
+    실패 시 빈 집합 (빈 집합은 '전부 미기록'과 구분 불가 →
+    호출부가 스키마 조회 등 이후 단계에서 자연스럽게 재시도한다).
+    """
+    if not session_id:
+        return set()
+    numbers: set = set()
+    cursor = None
+    try:
+        while True:
+            body: Dict[str, Any] = {
+                "filter": {
+                    "property": "Session ID",
+                    "rich_text": {"equals": session_id},
+                },
+                "page_size": 100,
+            }
+            if cursor:
+                body["start_cursor"] = cursor
+            res = requests.post(
+                f"{config.NOTION_API_BASE}/databases/{config.database_id()}/query",
+                headers=_headers(),
+                json=body,
+                timeout=15,
+            )
+            if res.status_code != 200:
+                log.error("기록 턴 조회 실패 %s: %s", res.status_code, res.text[:300])
+                return set()
+            for page in res.json().get("results", []):
+                n = page.get("properties", {}).get("Turns", {}).get("number")
+                if n is not None:
+                    numbers.add(int(n))
+            if not res.json().get("has_more"):
+                break
+            cursor = res.json().get("next_cursor")
+    except requests.RequestException as e:
+        log.error("기록 턴 조회 예외: %s", e)
+        return set()
+    return numbers
+
+
 def find_page_by_session(session_id: str) -> Optional[str]:
     """Session ID 컬럼으로 기존 페이지 재탐색 (로컬 state 유실 시 복구용)."""
     if not session_id:

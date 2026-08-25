@@ -96,47 +96,68 @@ class AntigravityAdapter(Adapter):
             session_id=str(session_id),
         )
 
-    def parse_last_turn(self, payload: Dict[str, Any]) -> Tuple[str, List[Event], str]:
-        entries = load_jsonl(str(payload.get("transcriptPath", "")))
-        return self._parse_entries(entries)
-
     @staticmethod
     def _event_type(e: Dict[str, Any]) -> str:
         return str(e.get("type") or "").upper()
 
-    def parse_turns(self, payload: Dict[str, Any]) -> List[Tuple[int, Turn]]:
-        """트랜스크립트 전체를 턴 단위로 파싱.
+    def count_turns(self, payload: Dict[str, Any]) -> int:
+        """JSON 파싱 없이 USER_INPUT 라인 수만 세어 게이트 판정용으로 쓴다.
 
-        반환: [(턴이 끝나는 위치(offset), Turn), ...]
-        offset = 그 턴의 마지막 엔트리 다음 인덱스.
-        호출자는 이전에 기록한 offset보다 큰 것만 처리하면 된다 (중복 방지).
+        content 본문에 우연히 같은 문자열이 있으면 과대 계상될 수 있으나
+        방향이 안전하다 (게이트 통과 → parse_turns가 정확히 판정).
+        """
+        path = str(payload.get("transcriptPath", ""))
+        if not path or not os.path.exists(path):
+            return 0
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                return sum(1 for line in f if '"USER_INPUT"' in line)
+        except OSError:
+            return 0
+
+    def parse_turns(self, payload: Dict[str, Any],
+                    numbers: set) -> List[Turn]:
+        """요청된 순번의 턴만 파싱.
+
+        턴 순번 = USER_INPUT 출현 순서 (1부터).
+        트랜스크립트 재작성으로 엔트리가 삽입/삭제되어도
+        USER_INPUT의 상대 순서는 유지되므로 번호 기준은 안전하다.
         """
         entries = load_jsonl(str(payload.get("transcriptPath", "")))
-        turns: List[Tuple[int, Turn]] = []
+        turns: List[Turn] = []
 
+        number = 0
         i = 0
         while i < len(entries):
             if self._event_type(entries[i]) != "USER_INPUT":
                 i += 1
                 continue
 
+            number += 1
+
             # USER_INPUT 하나가 턴의 시작. 다음 USER_INPUT 직전까지가 같은 턴.
             user_request = clean_user_request(
                 str(entries[i].get("content") or "")
             )
+            occurred_at = str(entries[i].get("created_at") or "")
 
             events: List[Event] = []
             final_candidates: List[str] = []
 
             j = i + 1
             while j < len(entries) and self._event_type(entries[j]) != "USER_INPUT":
-                self._parse_entry(events, final_candidates, entries[j])
+                if number in numbers:
+                    self._parse_entry(events, final_candidates, entries[j])
                 j += 1
 
-            final_response = final_candidates[-1] if final_candidates else ""
-            turns.append((j, Turn(user_request=user_request,
-                                  final_response=final_response,
-                                  events=events)))
+            if number in numbers:
+                turns.append(Turn(
+                    number=number,
+                    occurred_at=occurred_at,
+                    user_request=user_request,
+                    final_response=final_candidates[-1] if final_candidates else "",
+                    events=events,
+                ))
             i = j
 
         return turns
@@ -191,8 +212,9 @@ class AntigravityAdapter(Adapter):
 
     def parse_last_turn(self, payload: Dict[str, Any]) -> Tuple[str, List[Event], str]:
         """(하위 호환용) 마지막 턴만 파싱."""
-        turns = self.parse_turns(payload)
+        total = self.count_turns(payload)
+        turns = self.parse_turns(payload, {total})
         if not turns:
             return "", [], ""
-        turn = turns[-1][1]
+        turn = turns[-1]
         return turn.user_request, turn.events, turn.final_response

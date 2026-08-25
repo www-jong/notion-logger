@@ -94,7 +94,9 @@ def build_properties(schema: Dict[str, Any], ctx: Context,
     put("Status", {"select": {"name": status}})
     put("Work Type", {"select": {"name": work_type}})
     put("Session ID", {"rich_text": [{"text": {"content": _truncate(ctx.session_id)}}]})
-    put("Created At", {"date": {"start": now_iso}})
+    # Created At = 대화가 실제로 오간 시각 (트랜스크립트 기준)
+    put("Created At", {"date": {"start": turn.occurred_at or now_iso}})
+    # Last At = 노션에 기록된 시각
     put("Last At", {"date": {"start": now_iso}})
 
     for name, value in (

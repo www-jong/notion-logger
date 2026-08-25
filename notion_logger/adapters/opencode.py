@@ -28,7 +28,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from .base import Adapter, Context, Event, Turn, classify_tool, git_project_name
 
@@ -52,18 +52,6 @@ def connect_ro() -> Optional[sqlite3.Connection]:
         return conn
     except sqlite3.Error:
         return None
-
-
-def _cursor(time_created: Any, message_id: Any) -> str:
-    return f"{time_created}:{message_id}"
-
-
-def _split_cursor(value: Any) -> Tuple[int, str]:
-    time_s, _, msg_id = str(value).partition(":")
-    try:
-        return int(time_s), msg_id
-    except ValueError:
-        return 0, msg_id
 
 
 class OpenCodeAdapter(Adapter):
@@ -105,71 +93,109 @@ class OpenCodeAdapter(Adapter):
             session_id=session_id,
         )
 
-    def is_new(self, offset: Any, last_offset: Any) -> bool:
-        """커서 문자열 비교. (time_created, id) 순서쌍으로 판정한다."""
-        return _split_cursor(offset) > _split_cursor(last_offset)
+    def _load_messages(self, session_id: str):
+        """세션 메시지 메타를 시간순으로 읽는다. 실패 시 빈 리스트."""
+        conn = connect_ro()
+        if conn is None:
+            return []
+        try:
+            rows = conn.execute(
+                "SELECT id, time_created, data FROM message "
+                "WHERE session_id = ? ORDER BY time_created, id",
+                (session_id,),
+            ).fetchall()
+            out = []
+            for row in rows:
+                try:
+                    meta = json.loads(row["data"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(meta, dict):
+                    out.append((row["id"], int(row["time_created"]), meta))
+            return out
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
 
-    def parse_turns(self, payload: Dict[str, Any]) -> List[Tuple[Any, Turn]]:
-        """DB에서 세션 메시지를 읽어 턴 단위로 파싱.
+    @staticmethod
+    def _iso(ms: int) -> str:
+        """epoch ms → ISO 8601 UTC."""
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
 
-        반환: [(커서 "time_created:id", Turn), ...]
+    def count_turns(self, payload: Dict[str, Any]) -> int:
+        """user 역할 메시지 수 = 총 턴 수. 인덱스 있어 저비용."""
+        session_id = str(payload.get("sessionID") or "")
+        if not session_id:
+            return 0
+        conn = connect_ro()
+        if conn is None:
+            return 0
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM message "
+                "WHERE session_id = ? AND json_extract(data, '$.role') = 'user'",
+                (session_id,),
+            ).fetchone()
+            return int(row["c"]) if row else 0
+        except sqlite3.Error:
+            return 0
+        finally:
+            conn.close()
+
+    def parse_turns(self, payload: Dict[str, Any],
+                    numbers: set) -> List[Turn]:
+        """요청된 순번의 턴만 파싱.
+
+        턴 순번 = user 메시지 출현 순서 (1부터).
+        해당 턴은 자기 user 메시지부터 다음 user 메시지 직전까지.
         """
         session_id = str(payload.get("sessionID") or "")
         if not session_id:
             return []
 
-        conn = connect_ro()
-        if conn is None:
+        messages = self._load_messages(session_id)
+        if not messages:
             return []
 
-        turns: List[Tuple[str, Turn]] = []
-        try:
-            messages = conn.execute(
-                "SELECT id, time_created, data FROM message "
-                "WHERE session_id = ? ORDER BY time_created, id",
-                (session_id,),
-            ).fetchall()
+        # user 메시지 위치(인덱스) 목록
+        user_idx = [i for i, (_, _, m) in enumerate(messages)
+                    if str(m.get("role") or "") == "user"]
 
-            current: Optional[Turn] = None
-            current_events: List[Event] = []
-            final_candidates: List[str] = []
-            current_cursor = ""
+        turns: List[Turn] = []
+        for seq, start in enumerate(user_idx, start=1):
+            if seq not in numbers:
+                continue
+            end = user_idx[seq] if seq < len(user_idx) else len(messages)
 
-            for row in messages:
-                cursor = _cursor(row["time_created"], row["id"])
-                try:
-                    meta = json.loads(row["data"])
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                if not isinstance(meta, dict):
-                    continue
+            msg_id, msg_time, _ = messages[start]
+            turn = Turn(
+                number=seq,
+                occurred_at=self._iso(msg_time),
+                user_request="",
+                final_response="",
+                events=[],
+            )
 
-                role = str(meta.get("role") or "")
-
-                if role == "user":
-                    # 이전 턴 확정
-                    if current is not None:
-                        current.final_response = final_candidates[-1] if final_candidates else ""
-                        turns.append((current_cursor, current))
-                    request = self._user_request(conn, row["id"])
-                    current = Turn(user_request=request, final_response="", events=[])
-                    current_events = current.events
-                    final_candidates = []
-                    current_cursor = cursor
-                elif role == "assistant":
-                    self._parse_assistant(conn, row["id"], current_events, final_candidates)
-                    current_cursor = cursor
-
-            # 마지막 턴 확정
-            if current is not None:
-                current.final_response = final_candidates[-1] if final_candidates else ""
-                turns.append((current_cursor, current))
-
-        except sqlite3.Error:
-            return []
-
-        finally:
-            conn.close()
+            conn = connect_ro()
+            if conn is None:
+                turns.append(turn)
+                continue
+            try:
+                turn.user_request = self._user_request(conn, msg_id)
+                events: List[Event] = []
+                final_candidates: List[str] = []
+                for idx in range(start + 1, end):
+                    mid = messages[idx][0]
+                    if str(messages[idx][2].get("role") or "") != "assistant":
+                        continue
+                    self._parse_assistant(conn, mid, events, final_candidates)
+                turn.events = events
+                turn.final_response = final_candidates[-1] if final_candidates else ""
+                turns.append(turn)
+            finally:
+                conn.close()
 
         return turns
 
